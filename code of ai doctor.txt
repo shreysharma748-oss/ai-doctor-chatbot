@@ -1,0 +1,106 @@
+import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.neighbors import KNeighborsClassifier
+import gradio as gr
+
+# -------------------------------------
+# LOAD YOUR CSV FILES
+# -------------------------------------
+df = pd.read_csv("diseases_symptoms_precautions.csv")
+
+# -------------------------------------
+# PREPARE SYMPTOM DATAFRAME (symptom_df)
+# -------------------------------------
+symptom_df = df.copy()
+symptom_split = symptom_df["Symptoms"].str.split(", ", expand=True)
+symptom_split.columns = [f"Symptom_{i+1}" for i in range(symptom_split.shape[1])]
+symptom_df = pd.concat([symptom_df[["Disease"]], symptom_split], axis=1)
+
+# -------------------------------------
+# PREPARE PRECAUTION DATAFRAME (precaution_df)
+# -------------------------------------
+precaution_df = df.copy()
+prec_split = precaution_df["Precautions"].str.split(", ", expand=True)
+prec_split.columns = [f"Precaution_{i+1}" for i in range(prec_split.shape[1])]
+precaution_df = pd.concat([precaution_df[["Disease"]], prec_split], axis=1)
+
+# -------------------------------------
+# BUILD SYMPTOM → DISEASE MODEL
+# -------------------------------------
+symptom_texts = []
+disease_labels = []
+
+for i in range(len(symptom_df)):
+    disease = symptom_df["Disease"][i]
+    symptoms = ""
+
+    for col in symptom_df.columns[1:]:
+        val = str(symptom_df[col][i])
+        if val.lower() != "nan":
+            symptoms += val + " "
+
+    symptom_texts.append(symptoms.strip())
+    disease_labels.append(disease)
+
+sym_vectorizer = TfidfVectorizer()
+X_sym = sym_vectorizer.fit_transform(symptom_texts)
+
+symptom_model = KNeighborsClassifier(n_neighbors=1)
+symptom_model.fit(X_sym, disease_labels)
+
+# -------------------------------------
+# BUILD DISEASE → PRECAUTION MODEL
+# -------------------------------------
+disease_list = precaution_df["Disease"].astype(str).tolist()
+
+precaution_texts = []
+for i in range(len(precaution_df)):
+    t = ""
+    for col in ["Precaution_1", "Precaution_2", "Precaution_3", "Precaution_4"]:
+        val = str(precaution_df[col][i])
+        if val.lower() != "nan":
+            t += f"- {val}\n"
+    precaution_texts.append(t)
+
+dis_vectorizer = TfidfVectorizer()
+X_dis = dis_vectorizer.fit_transform(disease_list)
+
+precaution_model = KNeighborsClassifier(n_neighbors=1)
+precaution_model.fit(X_dis, precaution_texts)
+
+# -------------------------------------
+# UI CHATBOT FUNCTION
+# -------------------------------------
+def chatbot_response(user_input):
+    vec = sym_vectorizer.transform([user_input])
+    disease = symptom_model.predict(vec)[0]
+
+    vec2 = dis_vectorizer.transform([disease])
+    precautions = precaution_model.predict(vec2)[0]
+
+    return f"""
+### 🦠 Predicted Disease:  
+*{disease}*
+
+### 💊 Precautions:
+{precautions}
+"""
+
+# -------------------------------------
+# UI
+# -------------------------------------
+ui = gr.Interface(
+    fn=chatbot_response,
+    inputs=gr.Textbox(
+        placeholder="Type your symptoms here...",
+        lines=3,
+        label="Enter Symptoms"
+    ),
+    outputs=gr.Markdown(),
+    title="🩺 AI Doctor Chatbot",
+    description="### 🤖 Smart Health Assistant\nType symptoms and get immediate guidance.",
+    theme="soft",
+    allow_flagging="never"
+)
+
+ui.launch()
